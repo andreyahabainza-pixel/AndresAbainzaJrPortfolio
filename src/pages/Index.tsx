@@ -5,6 +5,7 @@ import {
   Barcode,
   Box,
   Calculator,
+  Camera,
   Download,
   History,
   LogOut,
@@ -19,7 +20,9 @@ import {
   Trash2,
   UserRound,
   WifiOff,
+  X,
 } from "lucide-react";
+import { BrowserMultiFormatReader, type IScannerControls } from "@zxing/browser";
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { z } from "zod";
 
@@ -96,7 +99,12 @@ const Index = () => {
   const [receiptTxn, setReceiptTxn] = useState<Transaction | null>(null);
   const [queuedSales, setQueuedSales] = useState<QueuedSale[]>(readQueue());
   const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [cameraOpen, setCameraOpen] = useState(false);
+  const [cameraError, setCameraError] = useState("");
   const barcodeRef = useRef<HTMLInputElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const scannerControlsRef = useRef<IScannerControls | null>(null);
+  const lastScannedRef = useRef<{ code: string; at: number } | null>(null);
 
   const total = useMemo(() => cart.reduce((sum, item) => sum + Number(item.price) * item.quantity, 0), [cart]);
   const change = Math.max((Number(payment) || 0) - total, 0);
@@ -142,16 +150,7 @@ const Index = () => {
       supabase.from("staff_profiles").select("user_id, username, full_name").eq("user_id", user.id).maybeSingle(),
     ]);
 
-    const userRole: Role | null =
-  roles?.some((row) => row.role === "admin")
-    ? "admin"
-    : (roles?.[0]?.role as Role) || null;
-
-setRole(userRole);
-setProfile(profiles || null);
-setSessionReady(true);
-
-if (userRole) await loadData();
+    const userRole = roles?.some((row) => row.role === "admin") ? "admin" : roles?.[0]?.role || null;
     setRole(userRole);
     setProfile(profiles || null);
     setSessionReady(true);
@@ -241,33 +240,90 @@ if (userRole) await loadData();
     }
   };
 
-const scanBarcode = () => {
-  const code = barcodeInput.trim().toLowerCase();
-  if (!code) return;
+  const scanBarcode = useCallback((rawCode?: string) => {
+    const code = (rawCode ?? barcodeInput).trim();
+    if (!code) return;
+    const product = products.find((item) => item.barcode.toLowerCase() === code.toLowerCase());
+    if (!product) {
+      setPreview(null);
+      setScanError(`Barcode "${code}" not found. Use product search or register it first.`);
+      toast({ title: "Product not found", description: code, variant: "destructive" });
+      return;
+    }
+    setPreview(product);
+    setBarcodeInput(code);
+    setScanError("");
+    playBeep();
+  }, [barcodeInput, products, playBeep, toast]);
 
-  const product = products.find(
-    (item) =>
-      (
-        item.barcode.toLowerCase() === code ||
-        item.name.toLowerCase().includes(code)
-      )
-  );
+  useEffect(() => {
+    if (!cameraOpen) return;
+    let cancelled = false;
+    let stream: MediaStream | null = null;
+    const reader = new BrowserMultiFormatReader();
+    setCameraError("");
 
-  if (!product) {
-    setPreview(null);
-    setScanError("Product not found (try barcode or name search).");
-    toast({
-      title: "Product not found",
-      description: code,
-      variant: "destructive",
-    });
-    return;
-  }
+    (async () => {
+      try {
+        if (!navigator.mediaDevices?.getUserMedia) {
+          throw new Error("Camera access is blocked here. Open this POS in a direct Chrome/Safari HTTPS tab, then allow camera permission.");
+        }
+        if (!window.isSecureContext) {
+          throw new Error("Camera requires HTTPS. Open the POS using an https:// preview or published link.");
+        }
 
-  setPreview(product);
-  setScanError("");
-  playBeep();
-};
+        // Try rear camera first, fall back to any camera
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: { ideal: "environment" } },
+            audio: false,
+          });
+        } catch {
+          stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+        }
+
+        if (cancelled || !videoRef.current) {
+          stream?.getTracks().forEach((t) => t.stop());
+          return;
+        }
+
+        const controls = await reader.decodeFromStream(stream, videoRef.current, (result, _err, ctrl) => {
+          if (cancelled) { ctrl.stop(); return; }
+          if (result) {
+            const code = result.getText();
+            const now = Date.now();
+            if (lastScannedRef.current && lastScannedRef.current.code === code && now - lastScannedRef.current.at < 1500) return;
+            lastScannedRef.current = { code, at: now };
+            scanBarcode(code);
+          }
+        });
+        if (cancelled) { controls.stop(); return; }
+        scannerControlsRef.current = controls;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Unable to access camera.";
+        setCameraError(message);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      scannerControlsRef.current?.stop();
+      scannerControlsRef.current = null;
+      stream?.getTracks().forEach((t) => t.stop());
+    };
+  }, [cameraOpen, scanBarcode]);
+
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get("camera") === "1") {
+      setCameraOpen(true);
+    }
+  }, []);
+
+  const openCameraInNewTab = () => {
+    const url = new URL(window.location.href);
+    url.searchParams.set("camera", "1");
+    window.open(url.toString(), "_blank", "noopener,noreferrer");
+  };
 
   const addToCart = (product = preview) => {
     if (!product) return;
@@ -362,6 +418,7 @@ const scanBarcode = () => {
   };
 
   const deleteProduct = async (productId: string) => {
+    if (!window.confirm("Delete this product? Past sale records will keep their item names.")) return;
     const { error } = await supabase.from("products").delete().eq("id", productId);
     if (error) toast({ title: "Delete failed", description: error.message, variant: "destructive" });
     else {
@@ -369,6 +426,25 @@ const scanBarcode = () => {
       toast({ title: "Product deleted" });
     }
   };
+
+  const deleteTransaction = async (transactionId: string) => {
+    if (role !== "admin") {
+      toast({ title: "Admin only", description: "Only admins can delete transactions.", variant: "destructive" });
+      return;
+    }
+    if (!window.confirm("Delete this transaction? This cannot be undone.")) return;
+    const { error } = await (supabase.rpc as unknown as (fn: string, args: Record<string, unknown>) => Promise<{ data: boolean | null; error: Error | null }>)("delete_transaction", {
+      _transaction_id: transactionId,
+    });
+    if (error) {
+      toast({ title: "Delete failed", description: error.message, variant: "destructive" });
+      return;
+    }
+    if (receiptTxn?.id === transactionId) setReceiptTxn(null);
+    await loadData();
+    toast({ title: "Transaction deleted" });
+  };
+
 
   const filteredProducts = useMemo(() => {
     const term = searchTerm.toLowerCase().trim();
@@ -517,14 +593,18 @@ const scanBarcode = () => {
         <TabsContent value="pos" className="mt-4 grid gap-4 xl:grid-cols-[0.9fr_1.1fr]">
           <section className="space-y-4">
             <Card>
-              <CardHeader className="pb-3"><CardTitle className="flex items-center gap-2"><Barcode className="h-5 w-5 text-primary" /> Barcode and Name Scanner</CardTitle></CardHeader>
+              <CardHeader className="pb-3"><CardTitle className="flex items-center gap-2"><Barcode className="h-5 w-5 text-primary" /> Barcode Scanner</CardTitle></CardHeader>
               <CardContent className="space-y-4">
-                <div className="flex gap-2">
-                  <Input ref={barcodeRef} value={barcodeInput} onChange={(e) => setBarcodeInput(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") preview ? addToCart() : scanBarcode(); }} placeholder="Scan or type barcode, then Enter" className="h-14 text-lg" />
-                  <Button size="lg" onClick={scanBarcode}><Search className="h-5 w-5" /> Scan</Button>
+                <div className="flex flex-wrap gap-2">
+                  <Input ref={barcodeRef} value={barcodeInput} onChange={(e) => setBarcodeInput(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") preview ? addToCart() : scanBarcode(); }} placeholder="Scan or type barcode, then Enter" className="h-14 flex-1 text-lg" />
+                  <Button size="lg" onClick={() => scanBarcode()}><Search className="h-5 w-5" /> Scan</Button>
+                  <Button size="lg" variant="secondary" onClick={() => setCameraOpen(true)}><Camera className="h-5 w-5" /> Camera</Button>
                 </div>
                 {scanError && <div className="rounded-md border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">{scanError}</div>}
-                
+                <div className="grid gap-2">
+                  <Label>Manual product search</Label>
+                  <Input value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} placeholder="Search name or barcode" />
+                </div>
               </CardContent>
             </Card>
 
@@ -647,7 +727,7 @@ const scanBarcode = () => {
 
         <TabsContent value="history" className="mt-4 space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-3"><h2 className="text-2xl font-bold tracking-normal">Transaction History</h2><Button variant="outline" onClick={exportCsv}><Download className="h-4 w-4" /> Export CSV</Button></div>
-          <Card><CardContent className="overflow-auto p-0"><div className="min-w-[820px] divide-y divide-border">{transactions.map((txn) => <button key={txn.id} onClick={() => setReceiptTxn(txn)} className="grid w-full grid-cols-[1fr_1fr_1fr_1fr_auto] items-center gap-4 p-4 text-left hover:bg-secondary"><span>{dateFmt.format(new Date(txn.created_at))}</span><span>{txn.transaction_no}</span><span>{txn.cashier_name}</span><span className="font-bold text-primary">{peso.format(Number(txn.total))}</span><Receipt className="h-4 w-4" /></button>)}</div></CardContent></Card>
+          <Card><CardContent className="overflow-auto p-0"><div className="min-w-[820px] divide-y divide-border">{transactions.map((txn) => <div key={txn.id} className="grid w-full grid-cols-[1fr_1fr_1fr_1fr_auto_auto] items-center gap-4 p-4 hover:bg-secondary"><button onClick={() => setReceiptTxn(txn)} className="contents text-left"><span>{dateFmt.format(new Date(txn.created_at))}</span><span>{txn.transaction_no}</span><span>{txn.cashier_name}</span><span className="font-bold text-primary">{peso.format(Number(txn.total))}</span><Receipt className="h-4 w-4" /></button><Button variant="ghost" size="icon" onClick={() => deleteTransaction(txn.id)} disabled={role !== "admin"} aria-label="Delete transaction"><Trash2 className="h-4 w-4 text-destructive" /></Button></div>)}</div></CardContent></Card>
         </TabsContent>
 
         <TabsContent value="account" className="mt-4 grid gap-4 md:grid-cols-2">
@@ -661,6 +741,44 @@ const scanBarcode = () => {
           <DialogHeader><DialogTitle>Printable Receipt</DialogTitle><DialogDescription>{receiptTxn?.transaction_no}</DialogDescription></DialogHeader>
           {receiptTxn && <div className="space-y-3 rounded-md border border-border p-4"><div className="text-center"><p className="font-bold">Smart Barcode POS</p><p className="text-xs text-muted-foreground">{dateFmt.format(new Date(receiptTxn.created_at))}</p><p className="text-xs text-muted-foreground">Cashier: {receiptTxn.cashier_name}</p></div><div className="divide-y divide-border">{receiptItems.map((item) => <div key={item.id} className="flex justify-between py-2 text-sm"><span>{item.product_name} x{item.quantity}</span><span>{peso.format(Number(item.price) * item.quantity)}</span></div>)}</div><div className="space-y-1 border-t border-border pt-3 text-sm"><div className="flex justify-between font-bold"><span>Total</span><span>{peso.format(Number(receiptTxn.total))}</span></div><div className="flex justify-between"><span>Payment</span><span>{peso.format(Number(receiptTxn.payment))}</span></div><div className="flex justify-between"><span>Change</span><span>{peso.format(Number(receiptTxn.change_amount))}</span></div></div></div>}
           <DialogFooter><Button variant="outline" onClick={() => window.print()}><Printer className="h-4 w-4" /> Print</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={cameraOpen} onOpenChange={setCameraOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2"><Camera className="h-5 w-5" /> Camera Scanner</DialogTitle>
+            <DialogDescription>Point your camera at a barcode or QR code. Detected products are previewed automatically.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="relative overflow-hidden rounded-md border border-border bg-black aspect-video">
+              <video ref={videoRef} className="h-full w-full object-cover" muted playsInline />
+              <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+                <div className="h-1/2 w-3/4 rounded-md border-2 border-primary/70 shadow-[0_0_0_9999px_rgba(0,0,0,0.35)]" />
+              </div>
+            </div>
+            {cameraError && (
+              <div className="space-y-3 rounded-md border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
+                <p>{cameraError}</p>
+                <Button variant="outline" size="sm" onClick={openCameraInNewTab}>Open secure camera tab</Button>
+              </div>
+            )}
+            {preview && (
+              <div className="rounded-md border border-border bg-secondary p-3">
+                <p className="text-sm text-muted-foreground">Last detected</p>
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <p className="font-semibold">{preview.name}</p>
+                    <p className="text-xs text-muted-foreground">{preview.barcode} · {peso.format(Number(preview.price))}</p>
+                  </div>
+                  <Button size="sm" onClick={() => { addToCart(); }}><Plus className="h-4 w-4" /> Add</Button>
+                </div>
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setCameraOpen(false)}><X className="h-4 w-4" /> Close</Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </main>

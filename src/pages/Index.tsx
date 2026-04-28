@@ -44,6 +44,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/components/ui/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 import type { Database } from "@/integrations/supabase/types";
+import ProductCameraCapture from "@/components/ProductCameraCapture";
 
 const peso = new Intl.NumberFormat("en-PH", { style: "currency", currency: "PHP" });
 const dateFmt = new Intl.DateTimeFormat("en-PH", { month: "short", day: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
@@ -81,7 +82,9 @@ const Index = () => {
   const [userId, setUserId] = useState<string | null>(null);
   const [role, setRole] = useState<Role | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
-  const [authForm, setAuthForm] = useState({ email: "", password: "" });
+  const [authForm, setAuthForm] = useState({ email: "", password: "", fullName: "" });
+  const [authMode, setAuthMode] = useState<"login" | "signup">("login");
+  const [productCamera, setProductCamera] = useState<null | "front" | "back">(null);
   const [products, setProducts] = useState<Product[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [transactionItems, setTransactionItems] = useState<TransactionItem[]>([]);
@@ -220,9 +223,36 @@ const Index = () => {
       toast({ title: "Missing credentials", description: "Enter email and password.", variant: "destructive" });
       return;
     }
+    if (authMode === "signup") {
+      const { error } = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+          emailRedirectTo: `${window.location.origin}/`,
+          data: { full_name: authForm.fullName.trim() || email.split("@")[0] },
+        },
+      });
+      if (error) {
+        toast({ title: "Signup failed", description: error.message, variant: "destructive" });
+      } else {
+        toast({ title: "Account created", description: "You can now log in with your email and password." });
+        setAuthMode("login");
+      }
+      return;
+    }
     const { error } = await supabase.auth.signInWithPassword({ email, password });
     if (error) toast({ title: "Login failed", description: error.message, variant: "destructive" });
   };
+
+  const identifyProductFromImage = useCallback(async (dataUrl: string): Promise<string> => {
+    const { data, error } = await supabase.functions.invoke<{ name?: string; error?: string }>(
+      "identify-product",
+      { body: { imageBase64: dataUrl } },
+    );
+    if (error) throw new Error(error.message || "AI request failed");
+    if (data?.error) throw new Error(data.error);
+    return (data?.name || "").trim();
+  }, []);
 
   const handleForgotPassword = async () => {
     const email = authForm.email.trim();
@@ -252,6 +282,7 @@ const Index = () => {
     }
     setPreview(product);
     setBarcodeInput(code);
+    setSearchTerm(product.name);
     setScanError("");
     playBeep();
   }, [barcodeInput, products, playBeep, toast]);
@@ -400,7 +431,7 @@ const Index = () => {
     };
     const request = editingProduct
       ? supabase.from("products").update(payload).eq("id", editingProduct.id)
-      : supabase.from("products").insert(payload);
+      : supabase.from("products").insert({ ...payload, owner_user_id: userId! });
     const { error } = await request;
     if (error) {
       toast({ title: "Product not saved", description: error.message, variant: "destructive" });
@@ -536,25 +567,62 @@ const Index = () => {
           <div className="flex items-center justify-center p-6 lg:p-10">
             <Card className="w-full max-w-md card-shadow">
               <CardHeader>
-                <CardTitle className="flex items-center gap-2"><ShieldCheck className="h-5 w-5 text-primary" /> Staff Login</CardTitle>
+                <CardTitle className="flex items-center gap-2">
+                  <ShieldCheck className="h-5 w-5 text-primary" />
+                  {authMode === "login" ? "Staff Login" : "Create Account"}
+                </CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">
+                {authMode === "signup" && (
+                  <div className="grid gap-2">
+                    <Label>Full Name</Label>
+                    <Input
+                      value={authForm.fullName}
+                      onChange={(e) => setAuthForm({ ...authForm, fullName: e.target.value })}
+                      placeholder="Juan Dela Cruz"
+                    />
+                  </div>
+                )}
                 <div className="grid gap-2">
                   <Label>Email</Label>
-                  <Input value={authForm.email} onChange={(e) => setAuthForm({ ...authForm, email: e.target.value })} placeholder="staff@store.com" />
+                  <Input
+                    type="email"
+                    value={authForm.email}
+                    onChange={(e) => setAuthForm({ ...authForm, email: e.target.value })}
+                    placeholder="staff@store.com"
+                  />
                 </div>
                 <div className="grid gap-2">
                   <Label>Password</Label>
-                  <Input type="password" value={authForm.password} onChange={(e) => setAuthForm({ ...authForm, password: e.target.value })} onKeyDown={(e) => { if (e.key === "Enter") handleAuth(); }} placeholder="••••••••" />
+                  <Input
+                    type="password"
+                    value={authForm.password}
+                    onChange={(e) => setAuthForm({ ...authForm, password: e.target.value })}
+                    onKeyDown={(e) => { if (e.key === "Enter") handleAuth(); }}
+                    placeholder="••••••••"
+                  />
                 </div>
-                <Button className="w-full" size="lg" onClick={handleAuth}>Login</Button>
+                <Button className="w-full" size="lg" onClick={handleAuth}>
+                  {authMode === "login" ? "Login" : "Sign Up"}
+                </Button>
                 <button
                   type="button"
-                  onClick={handleForgotPassword}
+                  onClick={() => setAuthMode(authMode === "login" ? "signup" : "login")}
                   className="w-full text-sm text-primary hover:underline"
                 >
-                  Forgot password?
+                  {authMode === "login"
+                    ? "Don't have an account? Sign up"
+                    : "Already have an account? Log in"}
                 </button>
+                {authMode === "login" && (
+                  <button
+                    type="button"
+                    onClick={handleForgotPassword}
+                    className="w-full text-sm text-muted-foreground hover:underline"
+                  >
+                    Forgot password?
+                  </button>
+                )}
               </CardContent>
             </Card>
           </div>
@@ -683,14 +751,56 @@ const Index = () => {
           <Card>
             <CardHeader><CardTitle>{editingProduct ? "Edit Product" : "Add Product"}</CardTitle></CardHeader>
             <CardContent className="space-y-4">
-              {role !== "admin" && <div className="rounded-md border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">Admin only can add, edit, or delete products.</div>}
-              <div className="grid gap-2"><Label>Product Name</Label><Input value={productForm.name} onChange={(e) => setProductForm({ ...productForm, name: e.target.value })} /></div>
-              <div className="grid gap-2"><Label>Barcode</Label><Input value={productForm.barcode} onChange={(e) => setProductForm({ ...productForm, barcode: e.target.value })} /></div>
+              <div className="grid gap-2">
+                <Label>Product Name</Label>
+                <div className="flex gap-2">
+                  <Input
+                    value={productForm.name}
+                    onChange={(e) => setProductForm({ ...productForm, name: e.target.value })}
+                    placeholder="Type or capture product front"
+                    className="flex-1"
+                  />
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    onClick={() => setProductCamera("front")}
+                    title="Take a photo of the product front to auto-fill the name"
+                  >
+                    <Camera className="h-4 w-4" /> Front
+                  </Button>
+                </div>
+                <p className="text-xs text-muted-foreground">Tap Front to take a photo of the product packaging — AI will fill in the name.</p>
+              </div>
+              <div className="grid gap-2">
+                <Label>Barcode</Label>
+                <div className="flex gap-2">
+                  <Input
+                    value={productForm.barcode}
+                    onChange={(e) => setProductForm({ ...productForm, barcode: e.target.value })}
+                    placeholder="Type or capture product back"
+                    className="flex-1"
+                  />
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    onClick={() => setProductCamera("back")}
+                    title="Take a photo of the barcode to auto-fill it"
+                  >
+                    <Camera className="h-4 w-4" /> Back
+                  </Button>
+                </div>
+                <p className="text-xs text-muted-foreground">Tap Back to capture the barcode on the back of the product.</p>
+              </div>
               <div className="grid grid-cols-2 gap-3">
                 <div className="grid gap-2"><Label>Price</Label><Input inputMode="decimal" value={productForm.price} onChange={(e) => setProductForm({ ...productForm, price: e.target.value })} /></div>
                 <div className="grid gap-2"><Label>Stock</Label><Input inputMode="numeric" value={productForm.stock} onChange={(e) => setProductForm({ ...productForm, stock: e.target.value })} /></div>
               </div>
-              <Button className="w-full" onClick={saveProduct} disabled={role !== "admin"}>{editingProduct ? "Update Product" : "Save Product"}</Button>
+              <Button className="w-full" onClick={saveProduct}>{editingProduct ? "Update Product" : "Save Product"}</Button>
+              {editingProduct && (
+                <Button variant="outline" className="w-full" onClick={() => { setEditingProduct(null); setProductForm({ name: "", barcode: "", price: "", stock: "" }); }}>
+                  Cancel Edit
+                </Button>
+              )}
             </CardContent>
           </Card>
           <Card>
@@ -702,8 +812,8 @@ const Index = () => {
                     <div><p className="font-medium">{product.name}</p><p className="text-xs text-muted-foreground">{product.barcode}</p></div>
                     <p>{peso.format(Number(product.price))}</p>
                     <Badge variant={product.stock < 10 ? "destructive" : "secondary"}>{product.stock} stock</Badge>
-                    <Button variant="outline" size="sm" onClick={() => editProduct(product)} disabled={role !== "admin"}>Edit</Button>
-                    <Button variant="destructive" size="icon" onClick={() => deleteProduct(product.id)} disabled={role !== "admin"}><Trash2 className="h-4 w-4" /></Button>
+                    <Button variant="outline" size="sm" onClick={() => editProduct(product)}>Edit</Button>
+                    <Button variant="destructive" size="icon" onClick={() => deleteProduct(product.id)}><Trash2 className="h-4 w-4" /></Button>
                   </div>
                 ))}
               </div>
@@ -748,15 +858,32 @@ const Index = () => {
         <DialogContent className="max-w-lg">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2"><Camera className="h-5 w-5" /> Camera Scanner</DialogTitle>
-            <DialogDescription>Point your camera at a barcode or QR code. Detected products are previewed automatically.</DialogDescription>
+            <DialogDescription>
+              Hold the barcode <strong>4–8 inches</strong> from the camera, fill the red box, and keep it steady. Detected products appear automatically.
+            </DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
             <div className="relative overflow-hidden rounded-md border border-border bg-black aspect-video">
               <video ref={videoRef} className="h-full w-full object-cover" muted playsInline />
-              <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-                <div className="h-1/2 w-3/4 rounded-md border-2 border-primary/70 shadow-[0_0_0_9999px_rgba(0,0,0,0.35)]" />
+              {/* Visual guide */}
+              <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-2">
+                <div className="relative flex h-2/5 w-4/5 items-center justify-center rounded-md border-2 border-primary shadow-[0_0_0_9999px_rgba(0,0,0,0.45)]">
+                  {/* Scan line */}
+                  <div className="absolute inset-x-2 top-1/2 h-0.5 -translate-y-1/2 animate-pulse bg-primary/80" />
+                  {/* Corner markers */}
+                  <div className="absolute -left-px -top-px h-4 w-4 border-l-4 border-t-4 border-primary" />
+                  <div className="absolute -right-px -top-px h-4 w-4 border-r-4 border-t-4 border-primary" />
+                  <div className="absolute -bottom-px -left-px h-4 w-4 border-b-4 border-l-4 border-primary" />
+                  <div className="absolute -bottom-px -right-px h-4 w-4 border-b-4 border-r-4 border-primary" />
+                </div>
+                <span className="rounded bg-background/80 px-2 py-1 text-xs font-medium text-foreground">
+                  Center the barcode inside the box
+                </span>
               </div>
             </div>
+            <p className="text-xs text-muted-foreground">
+              Tip: good lighting and a steady hand help. If the camera can't read it, just type the barcode manually in the input field — both options always work.
+            </p>
             {cameraError && (
               <div className="space-y-3 rounded-md border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
                 <p>{cameraError}</p>
@@ -781,6 +908,23 @@ const Index = () => {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <ProductCameraCapture
+        open={productCamera !== null}
+        mode={productCamera ?? "front"}
+        onClose={() => setProductCamera(null)}
+        onResult={(value) => {
+          if (productCamera === "front") {
+            setProductForm((prev) => ({ ...prev, name: value }));
+            toast({ title: "Product name detected", description: value });
+          } else if (productCamera === "back") {
+            setProductForm((prev) => ({ ...prev, barcode: value }));
+            toast({ title: "Barcode detected", description: value });
+          }
+        }}
+        onError={(msg) => toast({ title: "Capture issue", description: msg, variant: "destructive" })}
+        identifyFromImage={identifyProductFromImage}
+      />
     </main>
   );
 };

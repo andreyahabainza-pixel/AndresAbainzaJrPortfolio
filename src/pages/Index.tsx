@@ -569,7 +569,7 @@ const Index = () => {
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <ShieldCheck className="h-5 w-5 text-primary" />
-                  {authMode === "login" ? "Staff Login" : "Create Account"}
+                  {authMode === "login" ? "Login" : "Create Account"}
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">

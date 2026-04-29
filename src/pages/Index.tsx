@@ -769,7 +769,7 @@ const Index = () => {
                     <Camera className="h-4 w-4" /> Front
                   </Button>
                 </div>
-                <p className="text-xs text-muted-foreground">Tap Front to take a photo of the product packaging — AI will fill in the name.</p>
+                <p className="text-xs text-muted-foreground">Tap Front to take a photo of the product packaging — System will fill in the name.</p>
               </div>
               <div className="grid gap-2">
                 <Label>Barcode</Label>
@@ -867,7 +867,7 @@ const Index = () => {
               <video ref={videoRef} className="h-full w-full object-cover" muted playsInline />
               {/* Visual guide */}
               <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-2">
-                <div className="relative flex h-2/5 w-4/5 items-center justify-center rounded-md border-2 border-primary shadow-[0_0_0_9999px_rgba(0,0,0,0.45)]">
+                <div className="h-[100px] w-[100px] items-center justify-center rounded-md border-2 border-primary shadow-[0_0_0_9999px_rgba(0,0,0,0.45)]">
                   {/* Scan line */}
                   <div className="absolute inset-x-2 top-1/2 h-0.5 -translate-y-1/2 animate-pulse bg-primary/80" />
                   {/* Corner markers */}

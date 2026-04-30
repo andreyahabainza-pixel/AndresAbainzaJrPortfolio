@@ -167,7 +167,7 @@ export const ProductCameraCapture = ({
             {/* Guide overlay */}
             <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
               {mode === "back" ? (
-                <div className="flex h-1/3 w-4/5 items-center justify-center rounded-md border-2 border-primary shadow-[0_0_0_9999px_rgba(0,0,0,0.45)]">
+                <div className="flex h-full w-full items-center justify-center rounded-md border-2 border-primary shadow-[0_0_0_9999px_rgba(0,0,0,0.45)]">
                   <span className="rounded bg-background/80 px-2 py-1 text-xs font-medium text-foreground">
                     Align barcode inside the box
                   </span>

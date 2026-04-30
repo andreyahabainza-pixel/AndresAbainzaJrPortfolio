@@ -97,7 +97,19 @@ export const ProductCameraCapture = ({
     canvas.height = h;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
-    ctx.drawImage(video, 0, 0, w, h);
+    const cropWidth = w * 0.8;
+    const cropHeight = h * 0.3;
+    const cropX = (w - cropWidth) / 2;
+    const cropY = (h - cropHeight) / 2;
+    
+    canvas.width = cropWidth;
+    canvas.height = cropHeight;
+    
+    ctx.drawImage(
+  video,
+  cropX, cropY, cropWidth, cropHeight, // source (cropped)
+  0, 0, cropWidth, cropHeight         // destination
+);
 
     setBusy(true);
     try {

@@ -863,7 +863,7 @@ const Index = () => {
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
-            <div className="relative overflow-hidden rounded-md border border-border bg-black w-full h-[400px]">
+            <div className="relative overflow-hidden rounded-md border border-border bg-black w-[400px] h-[400px]">
               <video ref={videoRef} className="h-full w-full object-cover" muted playsInline />
               {/* Visual guide */}
               <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-2">
